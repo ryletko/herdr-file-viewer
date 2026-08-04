@@ -237,11 +237,11 @@ impl Controller {
 
     /// A completed left-click: select the tree row it landed on (or focus the content pane). A
     /// double-click [`activate`](Self::activate)s the row — a directory toggles expand/collapse,
-    /// a file opens in zoom mode. `hand_off` (Ctrl **or** Alt held on release) hands a file to the
-    /// external editor instead — the mouse equivalent of the `e` key; on a directory it is a plain
-    /// select, and it never pairs into a double-click. Two modifiers because a terminal may claim
-    /// one of them before the application sees it: WezTerm, for instance, can bind Ctrl+click to
-    /// open-hyperlink with `mouse_reporting = true`, which takes it even from a TUI.
+    /// a file opens in zoom mode. `hand_off` (Ctrl **or** Alt held on release) opens a file with
+    /// the OS default app instead — the mouse equivalent of the `O` key; on a directory it is a
+    /// plain select, and it never pairs into a double-click. Two modifiers because a terminal may
+    /// claim one of them before the application sees it: WezTerm, for instance, can bind Ctrl+click
+    /// to open-hyperlink with `mouse_reporting = true`, which takes it even from a TUI.
     fn handle_click(&mut self, col: u16, row: u16, hand_off: bool) -> Effects {
         let region = self.hit_test(col, row);
         let now = Instant::now();
@@ -262,12 +262,12 @@ impl Controller {
                 self.tree.set_cursor(idx);
                 self.dispatch_render(); // selection changed → re-render the content pane
                 if hand_off {
-                    // Ctrl/Alt+click hands a file to the external editor, as `e` does. Clear
+                    // Ctrl/Alt+click opens a file with the OS default app, as `O` does. Clear
                     // the pending click so it cannot pair with the next one as a double-click —
-                    // the editor hand-off already consumed this gesture.
+                    // the hand-off already consumed this gesture.
                     self.last_click = None;
                     return if self.tree.selected().is_some_and(|n| n.kind == NodeKind::File) {
-                        self.open_in_editor()
+                        self.open_with_app()
                     } else {
                         Effects::redraw() // directory: plain select, no expand/collapse
                     };
