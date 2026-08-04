@@ -224,7 +224,7 @@ impl Controller {
                     self.last_click = None;
                     Effects::noop()
                 }
-                None => self.handle_click(col, row),
+                None => self.handle_click(col, row, ev.modifiers.contains(KeyModifiers::CONTROL)),
             },
             _ => Effects::noop(),
         }
@@ -232,8 +232,10 @@ impl Controller {
 
     /// A completed left-click: select the tree row it landed on (or focus the content pane). A
     /// double-click [`activate`](Self::activate)s the row — a directory toggles expand/collapse,
-    /// a file opens in zoom mode (the editor hand-off is the `e` key, not the mouse).
-    fn handle_click(&mut self, col: u16, row: u16) -> Effects {
+    /// a file opens in zoom mode. `ctrl` (Ctrl held on release) hands a file to the external
+    /// editor instead — the mouse equivalent of the `e` key; on a directory it is a plain select,
+    /// and it never pairs into a double-click.
+    fn handle_click(&mut self, col: u16, row: u16, ctrl: bool) -> Effects {
         let region = self.hit_test(col, row);
         let now = Instant::now();
         match region {
@@ -252,6 +254,17 @@ impl Controller {
                 self.focus = Focus::Tree;
                 self.tree.set_cursor(idx);
                 self.dispatch_render(); // selection changed → re-render the content pane
+                if ctrl {
+                    // Ctrl+click hands a file to the external editor, exactly as `e` does. Clear
+                    // the pending click so it cannot pair with the next one as a double-click —
+                    // the editor hand-off already consumed this gesture.
+                    self.last_click = None;
+                    return if self.tree.selected().is_some_and(|n| n.kind == NodeKind::File) {
+                        self.open_in_editor()
+                    } else {
+                        Effects::redraw() // directory: plain select, no expand/collapse
+                    };
+                }
                 if double {
                     return self.activate(); // folder → expand/collapse, file → zoom mode
                 }
