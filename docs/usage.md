@@ -32,7 +32,11 @@ looking.
 Move the cursor with `↑`/`↓` (or `k`/`j`), expand/collapse a directory with `→`/`←` (or `l`/`h`) or
 `Enter`. The tree scrolls to keep the selection in view, and sideways for long or deeply-nested
 names — reachable by keyboard with `H` / `L` when the tree is focused. A scrollbar appears whenever
-there's more than fits. Narrow or widen the tree column with `<` / `>`, or drag the divider; the
+there's more than fits. The **mouse wheel and that scrollbar move the view, not the selection**: you
+can browse a long tree without loading a file, and the content pane keeps showing the file you
+picked. Clicking a row selects it; any key that moves the cursor scrolls it back into view. Clicking
+a folder's **arrow** (`▸`/`▾`) opens or closes just that folder and leaves the selection alone — so
+you can dig through the tree without losing the file you're reading. Narrow or widen the tree column with `<` / `>`, or drag the divider; the
 starting split, the tree's side, and a column cap are all [configurable](configuration.md).
 
 On a **deeply nested** layout the per-segment tree spends most of a narrow column on indentation, and

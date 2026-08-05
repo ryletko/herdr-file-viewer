@@ -557,6 +557,17 @@ pub struct Controller {
     /// The tree's horizontal scroll offset (columns), for reading long / deeply-nested rows. Like
     /// the cursor it is navigation state: reset on a re-root (AC-13), not carried.
     tree_hscroll: u16,
+    /// The tree's vertical viewport offset while it is **detached** from the cursor — the wheel or a
+    /// scrollbar drag scrolled the list without moving the selection, so the cursor may be
+    /// off-screen: `Some((offset, cursor_at_detach))`. `None` ⇒ attached, i.e. the viewport follows
+    /// the selection as before (#45).
+    ///
+    /// The cursor is stored WITH the offset so re-attaching needs no bookkeeping: the moment the
+    /// cursor moves — a key, a click, the finder, a re-root, a filter that clamps it — the stored
+    /// index goes stale and [`view_state`](Self::view_state) falls back to the follow-the-selection
+    /// offset. That is one comparison instead of clearing a flag from every path that can move the
+    /// cursor (and forgetting one would strand the viewport away from the selection).
+    tree_scroll: Option<(u16, usize)>,
     focus: Focus,
     /// The pane width the run loop last observed (session state for the narrow-split flag,
     /// AC-21); the Presenter still lays out from the live frame, never this.
@@ -571,12 +582,12 @@ pub struct Controller {
     /// `content_scroll` so the user cannot scroll past the last screenful.
     content_width: u16,
     content_height: u16,
-    /// How many lines (or finder list items, or help-overlay lines) one mouse-wheel event advances
-    /// — the effective **scroll step** (config `scroll_lines`, else [`crate::config::DEFAULT_SCROLL_LINES`]).
-    /// Set once at startup via [`apply_scroll_lines`](Self::apply_scroll_lines). Held as `isize`
-    /// because the wheel handlers negate it for wheel-up. The directory tree ignores the magnitude
-    /// (it advances one row per event via the delta's sign), so this only affects the content pane,
-    /// the finder list, and the help overlay.
+    /// How many lines (or tree rows, or finder list items, or help-overlay lines) one mouse-wheel
+    /// event advances — the effective **scroll step** (config `scroll_lines`, else
+    /// [`crate::config::DEFAULT_SCROLL_LINES`]). Set once at startup via
+    /// [`apply_scroll_lines`](Self::apply_scroll_lines). Held as `isize` because the wheel handlers
+    /// negate it for wheel-up. Applies to every wheel surface, the tree included: it scrolls its
+    /// viewport by the same step the content pane does.
     wheel_step: isize,
     /// The tree column's share of the width, as a percentage (the rest is the content pane).
     /// Adjustable from the keyboard since the viewer owns both columns (ADR-0002). Seeded at
@@ -849,6 +860,7 @@ impl Controller {
             confirm_discard: true,
             compact_dirs: false,
             tree_hscroll: 0,
+            tree_scroll: None,
             changed_only: false,
             diff_render_mode: DiffRenderMode::default(),
             status_mode: false,
@@ -1078,6 +1090,9 @@ impl Controller {
         self.content_scroll = 0;
         self.content_hscroll = 0;
         self.tree_hscroll = 0;
+        // The new root's tree starts at the top with the viewport attached to the cursor: a detached
+        // offset (and the cursor index it was pinned to) means nothing against a different list.
+        self.tree_scroll = None;
         self.overrides.clear();
         // The old root's rendered content is invalid under the new root — drop the displayed-file
         // path so the title falls back to a neutral label until the new selection's render lands
@@ -1602,6 +1617,16 @@ impl Controller {
         let help_body_height = geom.help_body_height;
         let help_body_rows = geom.help_body_rows;
         self.geom = geom;
+        // Retire a detached tree scroll whose pinned cursor has moved on. `view_state` only *ignores*
+        // a stale pin; dropping it here — once per drawn frame, and every cursor move draws one —
+        // is what stops a cursor that returns to the same index (`j` then `k`) from resurrecting an
+        // offset the user already scrolled away from.
+        if self
+            .tree_scroll
+            .is_some_and(|(_, pinned)| pinned != self.tree.cursor())
+        {
+            self.tree_scroll = None;
+        }
         if let Some(finder) = self.modal.finder_mut() {
             finder.clamp_hscroll(finder_max_hscroll);
         }
@@ -1660,6 +1685,14 @@ impl Controller {
         // Gutter width for a character selection's highlight (0 when not applicable); computed once
         // here so the line-select snapshot below stays a pure read.
         let sel_gutter = self.selection_gutter_len();
+        // The tree's vertical offset: the user's own if the wheel/scrollbar detached the viewport
+        // AND the cursor has not moved since (a moved cursor makes the pinned index stale, which
+        // re-attaches the viewport to the selection); otherwise last frame's offset, from which the
+        // Presenter scrolls minimally to keep the cursor in view (#45).
+        let (tree_scroll, tree_scroll_detached) = match self.tree_scroll {
+            Some((offset, pinned)) if pinned == selected => (offset, true),
+            _ => (self.geom.tree_scroll, false),
+        };
         ViewState {
             nodes,
             selected,
@@ -1673,9 +1706,8 @@ impl Controller {
             width: self.width,
             content_scroll: self.content_scroll,
             content_hscroll: self.content_hscroll,
-            // Last frame's tree offset, so the Presenter scrolls minimally from it (#45): selecting
-            // a row already in view — e.g. a mouse click — never jumps the viewport.
-            tree_scroll: self.geom.tree_scroll,
+            tree_scroll,
+            tree_scroll_detached,
             tree_hscroll: self.tree_hscroll,
             content_rows,
             wrap,
@@ -3299,6 +3331,11 @@ pub(super) enum ClickOrigin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseRegion {
     TreeRow(usize),
+    /// The expand arrow (`▸`/`▾`) of the directory row at this index — a click there toggles that
+    /// directory instead of selecting the row, the file-explorer convention. Only produced for a
+    /// directory row: a file's glyph cells are the blank alignment placeholder and stay a plain
+    /// [`TreeRow`](Self::TreeRow).
+    TreeArrow(usize),
     Content,
     /// The content column's top-border title (filename). Double-click toggles zoom (#106).
     ContentTitle,

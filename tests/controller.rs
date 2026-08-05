@@ -1961,6 +1961,133 @@ fn a_tree_click_maps_through_the_scroll_offset() {
     );
 }
 
+/// A root holding one directory (`sub/`, with two files inside) plus two top-level files. Visible
+/// rows sort directories first: `sub`, `a.txt`, `b.txt` — so `sub`'s arrow is on screen row 1.
+fn tree_with_a_subdirectory() -> TempDir {
+    let dir = TempDir::new();
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    std::fs::write(dir.path().join("sub").join("x.txt"), "x").unwrap();
+    std::fs::write(dir.path().join("sub").join("y.txt"), "y").unwrap();
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+    dir
+}
+
+/// A full left click (press + release) at `(col, row)` — activation happens on release.
+fn click(ctrl: &mut Controller, col: u16, row: u16) {
+    ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), col, row));
+}
+
+#[test]
+fn clicking_a_directory_arrow_expands_it_without_moving_the_selection() {
+    // Clicking the `▸` glyph is the file-explorer gesture: it opens that folder and touches nothing
+    // else — the selection (and so the content pane) stays on the file being read. The selection is
+    // an INDEX, and expanding renumbers every row below the folder, so the cursor must follow the
+    // node by path rather than sit on a stale index.
+    let dir = tree_with_a_subdirectory();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry()); // tree interior at x=1, y=1
+
+    ctrl.handle(Intent::NavDown); // select a.txt (row index 1)
+    let selected = ctrl.tree().selected().expect("a selection").path;
+    assert!(selected.ends_with("a.txt"));
+
+    // `sub`'s arrow: row-local columns 2..4 (status + annotation cells, depth 0) → screen col 3.
+    click(&mut ctrl, 3, 1);
+
+    let nodes = ctrl.tree().visible_nodes();
+    assert_eq!(
+        nodes.len(),
+        5,
+        "the directory expanded: sub, sub/x, sub/y, a.txt, b.txt"
+    );
+    assert!(nodes[0].expanded, "the clicked directory is now expanded");
+    assert_eq!(
+        ctrl.tree().selected().expect("a selection").path,
+        selected,
+        "the selection stays on the same NODE, not the same index"
+    );
+
+    // Clicking it again collapses it, still without disturbing the selection.
+    click(&mut ctrl, 3, 1);
+    assert_eq!(ctrl.tree().visible_nodes().len(), 3, "collapsed again");
+    assert_eq!(
+        ctrl.tree().selected().expect("a selection").path,
+        selected,
+        "and the selection survives the collapse too"
+    );
+}
+
+#[test]
+fn collapsing_a_directory_that_holds_the_selection_selects_that_directory() {
+    // The one case where an arrow click MUST move the selection: it was on a node inside the folder
+    // being collapsed, which no longer has a row. The folder itself — the nearest thing still on
+    // screen — takes the selection, and the content pane re-renders for it.
+    let dir = tree_with_a_subdirectory();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry());
+
+    click(&mut ctrl, 3, 1); // expand `sub`
+    ctrl.handle(Intent::NavDown); // select sub/x.txt
+    assert!(
+        ctrl.tree()
+            .selected()
+            .expect("a selection")
+            .path
+            .ends_with("x.txt")
+    );
+
+    click(&mut ctrl, 3, 1); // collapse `sub` — the selection's row disappears
+    let selected = ctrl.tree().selected().expect("a selection");
+    assert!(
+        selected.path.ends_with("sub"),
+        "the collapsed directory takes the selection, got {}",
+        selected.path.display()
+    );
+}
+
+#[test]
+fn clicking_a_file_row_in_the_arrow_columns_just_selects_it() {
+    // A file's glyph cells are the blank placeholder that keeps names aligned, not an arrow — there
+    // is nothing to expand there, so a click in those columns is an ordinary row click.
+    let dir = tree_with_a_subdirectory();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry());
+
+    click(&mut ctrl, 3, 2); // the arrow columns of row 2 == a.txt
+    assert!(
+        ctrl.tree()
+            .selected()
+            .expect("a selection")
+            .path
+            .ends_with("a.txt"),
+        "a click in a file's glyph columns selects the row"
+    );
+    assert_eq!(
+        ctrl.tree().visible_nodes().len(),
+        3,
+        "and nothing expanded or collapsed"
+    );
+}
+
+#[test]
+fn clicking_a_directory_name_still_only_selects_it() {
+    // Only the ARROW toggles. A click on the directory's name keeps the old behaviour — select on
+    // single click, expand on double — so the new target doesn't swallow the whole row.
+    let dir = tree_with_a_subdirectory();
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry());
+
+    click(&mut ctrl, 8, 1); // well past the glyph, on the name
+    assert_eq!(ctrl.tree().cursor(), 0, "the row is selected");
+    assert_eq!(
+        ctrl.tree().visible_nodes().len(),
+        3,
+        "a single click on the name does not expand"
+    );
+}
+
 #[test]
 fn dragging_the_tree_horizontal_scrollbar_scrolls_the_tree() {
     // The tree's horizontal scrollbar (bottom border) is draggable: press at the right end jumps
@@ -2127,16 +2254,16 @@ fn l_on_tree_focus_still_h_scrolls() {
 }
 
 #[test]
-fn dragging_the_tree_vertical_scrollbar_scrubs_the_selection() {
-    // The tree's vertical scrollbar is now draggable (it lives inside the pane, off the divider):
-    // pressing the bottom selects the last file, dragging to the top selects the first — the tree
-    // has no independent vertical offset, so the bar scrubs the selection through the list (#45).
+fn dragging_the_tree_vertical_scrollbar_scrolls_the_viewport() {
+    // The tree's vertical scrollbar is the window onto the file list, exactly like the content
+    // pane's: pressing the bottom of the track scrolls to the last screenful, dragging to the top
+    // returns to the first — and the selection never moves (the wheel and the bar agree).
     let dir = TempDir::new();
-    for i in 0..20 {
+    for i in 0..30 {
         std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
     }
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
-    let mut g = wide_geometry();
+    let mut g = wide_geometry(); // tree interior is 20 rows tall
     // The tree's vertical scrollbar track: a 1-col rect spanning the tree's text rows [1, 21).
     g.tree_vbar = Some(Rect {
         x: 37,
@@ -2146,19 +2273,24 @@ fn dragging_the_tree_vertical_scrollbar_scrubs_the_selection() {
     });
     ctrl.set_pane_geometry(g);
 
-    // Press at the bottom of the track → the last of the 20 files (index 19).
+    // Press at the bottom of the track → the last screenful (offset `nodes - viewport` = 10).
     ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 37, 20));
     assert_eq!(
-        ctrl.tree().cursor(),
-        19,
-        "pressing the bottom of the tree vbar selects the last node"
+        ctrl.view_state().tree_scroll,
+        10,
+        "pressing the bottom of the tree vbar scrolls to the last screenful"
     );
-    // Drag to the top → the first file.
-    ctrl.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 37, 1));
     assert_eq!(
         ctrl.tree().cursor(),
         0,
-        "dragging the tree vbar to the top selects the first node"
+        "a scrollbar drag never moves the selection"
+    );
+    // Drag to the top → back to the first row.
+    ctrl.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 37, 1));
+    assert_eq!(
+        ctrl.view_state().tree_scroll,
+        0,
+        "dragging the tree vbar to the top scrolls back to the first row"
     );
 }
 
@@ -2275,7 +2407,9 @@ fn a_content_click_then_a_same_row_tree_click_is_not_a_double_click() {
     );
 
     ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 50, 1)); // content pane, row 1
-    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 1)); // tree folder, same row
+    // Column 6 is the folder's NAME, not its expand arrow — the arrow is its own click target and
+    // would expand on a single click, which is not what this regression is about.
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 6, 1)); // tree folder, same row
     assert_eq!(
         ctrl.tree().visible_nodes().len(),
         1,
@@ -2299,7 +2433,9 @@ fn double_tap_on_the_same_row_activates_even_with_column_jitter() {
         "folder starts collapsed"
     );
 
-    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 1)); // tap 1, column 4
+    // Both taps land on the NAME (columns 5+): the expand arrow is a single-click target of its
+    // own, so a tap there would expand on tap 1 and prove nothing about double-tap jitter.
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 6, 1)); // tap 1, column 6
     ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 9, 1)); // tap 2, column 9 (jitter)
     assert_eq!(
         ctrl.tree().visible_nodes().len(),
@@ -2698,24 +2834,132 @@ fn wheel_scrolls_the_pane_under_the_cursor() {
 }
 
 #[test]
-fn wheel_over_the_tree_moves_the_selection() {
+fn wheel_over_the_tree_scrolls_the_viewport_not_the_selection() {
+    // The wheel over the tree scrolls the VIEWPORT — the desktop file-list convention — leaving the
+    // selection (and so the content pane) untouched; the offset detaches from the cursor, which lets
+    // the selected row scroll off-screen. Clamped to the last screenful at both ends.
     let dir = TempDir::new();
-    for f in ["a.txt", "b.txt", "c.txt"] {
-        std::fs::write(dir.path().join(f), "x").unwrap();
+    for i in 0..30 {
+        std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
+    }
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry()); // tree interior is 20 rows tall
+    assert_eq!(ctrl.tree().cursor(), 0);
+    assert_eq!(ctrl.view_state().tree_scroll, 0);
+
+    // Wheel-down: the viewport moves by the default scroll step (3), the cursor does not.
+    ctrl.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    let vs = ctrl.view_state();
+    assert_eq!(vs.tree_scroll, 3, "wheel-down scrolls the tree viewport");
+    assert!(
+        vs.tree_scroll_detached,
+        "the viewport is detached from the cursor, so the Presenter honours the offset as-is"
+    );
+    assert_eq!(
+        ctrl.tree().cursor(),
+        0,
+        "the selection stays put — the wheel never moves it"
+    );
+
+    // Wheel-up past the top clamps at 0 and re-attaches nothing (offset 0 is simply the top).
+    ctrl.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
+    ctrl.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
+    assert_eq!(
+        ctrl.view_state().tree_scroll,
+        0,
+        "wheel-up scrolls back to the top and clamps there"
+    );
+
+    // Wheel-down past the end clamps at `nodes - viewport` = 30 - 20 = 10.
+    for _ in 0..10 {
+        ctrl.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    }
+    assert_eq!(
+        ctrl.view_state().tree_scroll,
+        10,
+        "the tree never scrolls past its last screenful"
+    );
+    assert_eq!(ctrl.tree().cursor(), 0, "still no selection change");
+}
+
+#[test]
+fn a_click_after_a_wheel_scroll_selects_the_row_actually_under_the_cursor() {
+    // The pairing that makes wheel-scrolling useful: scroll the list, then click what you see. The
+    // click maps through the DETACHED offset (`hit_test` adds `geom.tree_scroll`), so it selects the
+    // row on screen — and because that row is already visible, re-attaching the viewport leaves it
+    // exactly where it is (no jump under the pointer).
+    let dir = TempDir::new();
+    for i in 0..30 {
+        std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
+    }
+    let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
+    ctrl.set_pane_geometry(wide_geometry()); // tree interior at y=1, 20 rows tall
+
+    ctrl.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5)); // offset 3
+    let mut g = wide_geometry();
+    g.tree_scroll = ctrl.view_state().tree_scroll; // the frame the user is clicking on
+    ctrl.set_pane_geometry(g);
+
+    // Click the topmost drawn row (screen row 1) → node index 0 + offset 3 = f03.txt.
+    ctrl.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 1));
+    ctrl.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 1));
+    assert_eq!(
+        ctrl.tree().cursor(),
+        3,
+        "the click lands on the row drawn there, not on the unscrolled list's row"
+    );
+    let vs = ctrl.view_state();
+    assert!(
+        !vs.tree_scroll_detached,
+        "selecting re-attaches the viewport to the cursor"
+    );
+    assert_eq!(
+        vs.tree_scroll, 3,
+        "and the viewport stays put — the clicked row was already visible"
+    );
+}
+
+#[test]
+fn moving_the_tree_cursor_re_attaches_the_scrolled_viewport() {
+    // The counterpart to the wheel test: a detached viewport is pinned to the cursor it was scrolled
+    // away from, so the next cursor move (a key here) makes that pin stale and the viewport goes back
+    // to following the selection — no stranded scroll offset.
+    let dir = TempDir::new();
+    for i in 0..30 {
+        std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
     }
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
     ctrl.set_pane_geometry(wide_geometry());
-    assert_eq!(ctrl.tree().cursor(), 0);
 
-    // The tree does not scroll independently, so the wheel moves the selection (its equivalent).
     ctrl.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
-    assert_eq!(
-        ctrl.tree().cursor(),
-        1,
-        "wheel-down over the tree moves the selection down"
+    assert!(
+        ctrl.view_state().tree_scroll_detached,
+        "scrolled away first"
     );
-    ctrl.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
-    assert_eq!(ctrl.tree().cursor(), 0, "wheel-up moves it back up");
+
+    ctrl.handle(Intent::NavDown); // any cursor move
+    let vs = ctrl.view_state();
+    assert_eq!(ctrl.tree().cursor(), 1, "the key moved the selection");
+    assert!(
+        !vs.tree_scroll_detached,
+        "the viewport re-attaches to the selection as soon as the cursor moves"
+    );
+    assert_eq!(
+        vs.tree_scroll, 0,
+        "and falls back to last frame's follow-the-cursor offset"
+    );
+
+    // Returning to the pinned index must NOT resurrect the old offset. `set_pane_geometry` stands in
+    // for the frame the run loop draws after each intent, which is where a stale pin is retired.
+    ctrl.set_pane_geometry(wide_geometry());
+    ctrl.handle(Intent::NavUp); // back to cursor 0, the index the scroll was pinned to
+    let vs = ctrl.view_state();
+    assert_eq!(ctrl.tree().cursor(), 0);
+    assert!(
+        !vs.tree_scroll_detached,
+        "a cursor that comes back to the pinned index must not revive the retired offset"
+    );
+    assert_eq!(vs.tree_scroll, 0, "the viewport stays with the selection");
 }
 
 #[test]
@@ -2911,23 +3155,22 @@ fn apply_scroll_lines_sets_the_help_wheel_step() {
 }
 
 #[test]
-fn apply_scroll_lines_does_not_change_the_tree_wheel_step() {
-    // AC-8: the tree advances by exactly one row per wheel event REGARDLESS of the effective scroll
-    // step — it uses the wheel delta's sign, not its magnitude.
+fn apply_scroll_lines_sets_the_tree_wheel_step() {
+    // AC-8: now that the wheel scrolls the tree's viewport (rather than nudging the selection one
+    // row), the tree advances by the effective scroll step like every other wheel surface.
     let dir = TempDir::new();
-    for i in 0..20 {
+    for i in 0..40 {
         std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
     }
     let (mut ctrl, _, _) = controller(dir.path(), false, StubGit::default(), false);
-    ctrl.set_pane_geometry(wide_geometry());
+    ctrl.set_pane_geometry(wide_geometry()); // tree interior is 20 rows tall
     ctrl.apply_scroll_lines(10);
-    assert_eq!(ctrl.tree().cursor(), 0);
 
     ctrl.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
     assert_eq!(
-        ctrl.tree().cursor(),
-        1,
-        "the tree wheel is one row per event regardless of scroll_lines"
+        ctrl.view_state().tree_scroll,
+        10,
+        "the tree wheel step follows scroll_lines (10)"
     );
 }
 
