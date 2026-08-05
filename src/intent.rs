@@ -68,6 +68,12 @@ pub enum Intent {
     /// Reveal the selected entry in the OS file manager (`R`). Read-only external hand-off
     /// (AC-2, AC-N1). Non-blocking.
     RevealInFileManager,
+    /// Open the run-a-command prompt (`!`) for the selected directory (a file's parent). Confirming
+    /// it hands the typed command to a NEW herdr tab rooted there — a hand-off like
+    /// [`Intent::OpenInEditor`], not something the viewer runs itself. The command is the user's
+    /// own, so it may do anything they could do from a shell; the viewer neither inspects nor
+    /// executes it.
+    RunCommand,
     /// Copy the selected node's **repo-relative** path to the clipboard (e.g. `src/app.rs`).
     /// Read-only — it copies a path string, never reads or writes the file's contents (AC-N3).
     CopyRepoPath,
@@ -162,7 +168,7 @@ pub enum Intent {
 impl Intent {
     /// Every intent variant — lets the dispatcher and tests enumerate the closed set so
     /// keyboard-completeness (AC-18) and the no-file/git-mutation invariant (AC-N3) stay checkable.
-    pub const ALL: [Intent; 41] = [
+    pub const ALL: [Intent; 42] = [
         Intent::NavUp,
         Intent::NavDown,
         Intent::PageUp,
@@ -181,6 +187,7 @@ impl Intent {
         Intent::OpenInEditor,
         Intent::OpenWithApp,
         Intent::RevealInFileManager,
+        Intent::RunCommand,
         Intent::CopyRepoPath,
         Intent::CopyAbsPath,
         Intent::AddAnnotation,
@@ -238,6 +245,11 @@ mod tests {
                 | Intent::OpenInEditor
                 | Intent::OpenWithApp
                 | Intent::RevealInFileManager
+                // Like the editor / OS-opener hand-offs above: the VIEWER writes nothing. It hands
+                // a command the user typed to a herdr tab's shell, exactly as it hands a file to
+                // `$EDITOR` — what that external process then does is the user's own doing, and is
+                // outside what this classification is about.
+                | Intent::RunCommand
                 | Intent::CopyRepoPath
                 | Intent::CopyAbsPath
                 | Intent::ShowAnnotations
@@ -332,11 +344,11 @@ mod tests {
     }
 
     #[test]
-    fn all_length_is_41() {
+    fn all_length_is_42() {
         assert_eq!(
             Intent::ALL.len(),
-            41,
-            "Intent::ALL must have exactly 41 variants"
+            42,
+            "Intent::ALL must have exactly 42 variants"
         );
     }
 
