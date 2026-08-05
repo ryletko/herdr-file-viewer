@@ -42,6 +42,7 @@ fn state(width: u16, focus: Focus) -> ViewState {
         content_scroll: 0,
         content_hscroll: 0,
         tree_scroll: 0,
+        tree_scroll_detached: false,
         tree_hscroll: 0,
         content_rows: 1, // the fixture content is one line
         wrap: false,

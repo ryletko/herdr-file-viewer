@@ -114,10 +114,14 @@ Canonical vocabulary for this repo. Glossary only: no implementation detail, no 
   **effective setting**s with their real values, one row each; it shows configuration, it
   does not edit it. The renderer commands are excluded: they are set and documented in the
   **config file**, and their built-in argv is long enough to wreck the row layout.
-- **scroll step**: how many content lines (or **file finder** list items, or help-overlay
-  lines) the mouse wheel advances per wheel event. Set by the `scroll_lines` **config file**
-  key (config > default; default 3, clamped to the range 1 to 10). The directory tree is
-  unaffected: it always advances one row per wheel event.
+- **scroll step**: how many content lines (or directory-tree rows, or **file finder** list
+  items, or help-overlay lines) the mouse wheel advances per wheel event. Set by the
+  `scroll_lines` **config file** key (config > default; default 3, clamped to the range 1 to
+  10). It applies to every wheel surface, the tree included.
+- **detached tree scroll**: the state where the directory tree's viewport has been scrolled
+  away from its cursor by the mouse wheel or a drag on its vertical scrollbar — the selection
+  stays on the file it was on (so the content pane does not change) and may sit off-screen.
+  Ends as soon as anything moves the tree cursor, which scrolls the selection back into view.
 - **tree width**: the directory tree column's share of the viewer pane, as a percent (the
   content pane takes the rest). Set by the `tree_width` **config file** key (config > default;
   default 30, clamped to the range 20 to 80). Seeds the startup split; the live grow/shrink keys

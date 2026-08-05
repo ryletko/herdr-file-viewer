@@ -77,6 +77,7 @@ fn sample_state() -> ViewState {
         content_scroll: 0,
         content_hscroll: 0,
         tree_scroll: 0,
+        tree_scroll_detached: false,
         tree_hscroll: 0,
         content_rows: 3, // the fixture content is three lines
         wrap: false,
@@ -846,11 +847,12 @@ fn content_vertical_scrollbar_is_driven_by_rendered_rows_not_raw_lines() {
 }
 
 #[test]
-fn tree_vertical_thumb_tracks_the_selection() {
-    // Review (codex/glm): the tree's vertical thumb reflects the CURSOR position, so dragging it
-    // (which scrubs the selection) makes the thumb follow — rather than the thumb being driven by
-    // the viewport offset while the drag moves the cursor (they'd diverge). With many nodes, a low
-    // selection puts the thumb near the top; a high selection puts it near the bottom.
+fn tree_vertical_thumb_tracks_the_viewport() {
+    // The tree's vertical thumb reflects the VIEWPORT offset — the same thing the wheel and a drag
+    // on the bar move — so the bar and what it scrolls can never diverge. While the viewport is
+    // attached to the cursor (the default) that offset follows the selection, so moving the
+    // selection down still walks the thumb down; detached, the thumb follows `tree_scroll` alone
+    // (asserted by `tree_vertical_thumb_follows_a_detached_scroll`).
     use herdr_file_viewer::presenter::geometry;
     use ratatui::layout::Rect;
     let area = Rect {
@@ -886,7 +888,125 @@ fn tree_vertical_thumb_tracks_the_selection() {
     let high = thumb_top(&state);
     assert!(
         high > low,
-        "the thumb moves down as the selection moves down (tracks the cursor): sel0={low} sel39={high}"
+        "the thumb moves down as the viewport follows the selection down: sel0={low} sel39={high}"
+    );
+}
+
+#[test]
+fn tree_vertical_thumb_follows_a_detached_scroll() {
+    // Once the wheel (or a scrollbar drag) detaches the viewport, the thumb reports where the
+    // VIEWPORT is, not where the off-screen cursor is: the selection stays on row 0 while the
+    // offset — and the thumb with it — walks down the track.
+    use herdr_file_viewer::presenter::geometry;
+    use ratatui::layout::Rect;
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 24,
+    };
+    let mut state = sample_state();
+    state.notices = vec![];
+    state.nodes = (0..40)
+        .map(|i| {
+            node(
+                &format!("/r/file-{i:02}.rs"),
+                NodeKind::File,
+                0,
+                false,
+                None,
+            )
+        })
+        .collect();
+    state.selected = 0;
+    state.tree_scroll_detached = true;
+    let track = geometry(area, &state).tree_vbar.expect("tree vbar present");
+    let thumb_top = |st: &ViewState| -> u16 {
+        let buf = render_buffer(st, area.width, area.height);
+        (track.y..track.y + track.height)
+            .find(|&y| buf.cell((track.x, y)).is_some_and(|c| c.symbol() == "▐"))
+            .expect("a thumb cell")
+    };
+
+    state.tree_scroll = 0;
+    let top = thumb_top(&state);
+    state.tree_scroll = u16::MAX; // clamped to the last screenful by the Presenter
+    let bottom = thumb_top(&state);
+    assert!(
+        bottom > top,
+        "the thumb follows the detached offset while the selection stays at 0: off0={top} offmax={bottom}"
+    );
+}
+
+#[test]
+fn a_detached_tree_scroll_is_drawn_as_is_and_clamped() {
+    // The detached case end-to-end: the Presenter draws from `tree_scroll` even though that scrolls
+    // the selected row off-screen (the wheel must not drag the selection along), and clamps the
+    // offset to the last screenful so an over-scroll can never blank the pane.
+    use herdr_file_viewer::presenter::geometry;
+    use ratatui::layout::Rect;
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 24,
+    };
+    let mut state = sample_state();
+    state.notices = vec![];
+    state.nodes = (0..40)
+        .map(|i| {
+            node(
+                &format!("/r/file-{i:02}.rs"),
+                NodeKind::File,
+                0,
+                false,
+                None,
+            )
+        })
+        .collect();
+    state.selected = 0;
+
+    // Attached (today's behaviour): the viewport stays with the cursor at the top.
+    assert_eq!(
+        geometry(area, &state).tree_scroll,
+        0,
+        "attached, the offset follows the selection"
+    );
+
+    // Detached: the offset is honoured as given, and the first drawn row is the one it names.
+    state.tree_scroll_detached = true;
+    state.tree_scroll = 5;
+    assert_eq!(
+        geometry(area, &state).tree_scroll,
+        5,
+        "a detached offset is drawn as-is, selection off-screen"
+    );
+    let buf = render_buffer(&state, area.width, area.height);
+    let first_row: String = (0..area.width)
+        .filter_map(|x| buf.cell((x, 1)).map(|c| c.symbol().to_string()))
+        .collect();
+    assert!(
+        first_row.contains("file-05.rs"),
+        "the top drawn row is the detached offset's node\n{first_row}"
+    );
+
+    // Over-scroll clamps to `nodes - viewport`, never past the final screenful.
+    state.tree_scroll = 500;
+    let clamped = geometry(area, &state).tree_scroll;
+    assert!(
+        clamped > 0 && clamped <= 40,
+        "an over-scrolled offset is clamped to the last screenful, got {clamped}"
+    );
+    let buf = render_buffer(&state, area.width, area.height);
+    let last_line: String = (0..area.width)
+        .filter_map(|x| {
+            buf.cell((x, area.height - 2))
+                .map(|c| c.symbol().to_string())
+        })
+        .collect();
+    assert!(
+        last_line.contains("file-39.rs"),
+        "the clamped viewport ends at the last node\n{last_line}"
     );
 }
 

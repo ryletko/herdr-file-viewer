@@ -94,8 +94,9 @@
 # held. Default:
 #confirm_discard = true
 
-# How many lines the mouse wheel scrolls per event (also how many items it moves
-# in the file-search list, and lines in the `?` help overlay). Can be set from 1
+# How many lines the mouse wheel scrolls per event (also how many rows it scrolls
+# the directory tree, how many items it moves in the file-search list, and lines
+# in the `?` help overlay). Can be set from 1
 # to 10 as a scale: 1 = slow, 3 = medium (default), 6 = fast, 10 = max speed.
 # Note: some terminals emit several wheel events per physical notch, so the
 # effective speed is this times that. Default:

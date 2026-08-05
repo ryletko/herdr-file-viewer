@@ -129,12 +129,13 @@ The viewer is keyboard-first; the mouse is additive and on by default:
 | Gesture | Action |
 | --- | --- |
 | **Click** a tree row | Select it (focus the tree) |
+| **Click** a folder’s arrow (`▸`/`▾`) | Expand / collapse that folder, leaving the selection — and the content pane — where they are |
 | **Double-click** a folder | Expand / collapse it (same as `Enter`) |
 | **Double-click** a file | Open it in **zoom mode**: content full-screen (same as `Enter`); the editor is the `e` key |
 | **Double-click** the content title | Toggle zoom: hide or show the tree (same as `z`). The filename sits on the content pane’s top border, so this works even when the tree is already hidden |
-| **Wheel** over the content pane | Scroll it vertically; over the tree, move the selection |
+| **Wheel** over a pane | Scroll that pane vertically — over the tree it scrolls the file list **without** moving the selection, so the content pane stays on the file you picked. Any key that moves the tree cursor scrolls it back into view |
 | **Horizontal wheel / swipe** | Scroll the content, or the tree, sideways (terminal-dependent, see below) |
-| **Drag** a scrollbar | Scroll that pane: drag ↕ on a vertical bar, ↔ on a horizontal bar; pressing the track jumps there |
+| **Drag** a scrollbar | Scroll that pane: drag ↕ on a vertical bar, ↔ on a horizontal bar; pressing the track jumps there. Like the wheel, the tree's vertical bar moves the view, not the selection |
 | **Drag** the divider | Resize the tree / content split |
 | **Drag** over the content text | **Select and copy text**: the selection highlights character-by-character as you drag (auto-scrolling past an edge) and is copied to the clipboard on release; no mode needed. Works in wrapped views (prose/markdown) too. `Esc`, a click elsewhere, or switching files clears the highlight |
 
