@@ -61,11 +61,19 @@ pub struct ViewState {
     /// Horizontal scroll offset of the content pane, in columns. Only meaningful when not
     /// wrapping (ratatui ignores it under wrap); lets long code/diff lines be read sideways.
     pub content_hscroll: u16,
-    /// The tree's vertical scroll offset from the LAST drawn frame (first visible node index),
-    /// carried back via [`PaneGeometry::tree_scroll`]. The Presenter scrolls *minimally* from it
-    /// so selecting a row already in view (e.g. a mouse click) never jumps the viewport (#45). `0`
-    /// on the first frame and whenever every node fits.
+    /// The tree's vertical scroll offset (first visible node index). Normally the offset from the
+    /// LAST drawn frame, carried back via [`PaneGeometry::tree_scroll`]: the Presenter scrolls
+    /// *minimally* from it so selecting a row already in view (e.g. a mouse click) never jumps the
+    /// viewport (#45). Under [`tree_scroll_detached`](Self::tree_scroll_detached) it is instead the
+    /// user's own wheel/scrollbar offset and is honoured as-is. `0` on the first frame and whenever
+    /// every node fits.
     pub tree_scroll: u16,
+    /// The tree's viewport has been scrolled away from the cursor by the wheel (or a scrollbar
+    /// drag), so [`tree_scroll`](Self::tree_scroll) is the user's offset: draw it as-is (clamped to
+    /// the last screenful) and let the selection sit off-screen, instead of pulling the viewport
+    /// back to keep the cursor visible. The controller clears this the moment the cursor moves, so
+    /// a key/click re-attaches the viewport to the selection — the desktop file-list convention.
+    pub tree_scroll_detached: bool,
     /// The tree's horizontal scroll offset, in columns — so a deeply-nested or long file name can
     /// be read sideways when it overflows the tree column. Driven by the `H`/`L` keys, the
     /// horizontal wheel, and by dragging the tree's horizontal scrollbar (the `←`/`→` keys are
@@ -458,6 +466,28 @@ fn tree_rows_max_width(nodes: &[Node]) -> usize {
 /// Persistent annotation styling is background-only so delegated syntax/git foregrounds survive.
 const ANNOTATION_STYLE: Style = Style::new().bg(Color::DarkGray);
 
+/// A tree row's prefix geometry, in columns: the git-status cell + the annotation cell, then
+/// [`TREE_INDENT_CELLS`] per depth level, then the [`TREE_GLYPH_CELLS`]-wide expand glyph. Named
+/// once here because two things must agree on it — [`tree_row`], which draws the prefix, and
+/// [`tree_arrow_span`], which maps a mouse click back onto the glyph.
+const TREE_MARKER_CELLS: usize = 2;
+const TREE_INDENT_CELLS: usize = 2;
+const TREE_GLYPH_CELLS: usize = 2;
+
+/// The column span a directory row's **expand arrow** occupies, in row-local columns (before the
+/// tree's horizontal scroll) — the click target that expands/collapses that directory. `None` for a
+/// file row, whose glyph is the reserved blank placeholder rather than an arrow.
+///
+/// Derived from the same prefix [`tree_row`] builds, so a click can never land beside the glyph it
+/// was drawn on; `tree_row_prefix_width_matches_the_arrow_span` pins the two together.
+pub fn tree_arrow_span(node: &Node) -> std::ops::Range<usize> {
+    let start = TREE_MARKER_CELLS + TREE_INDENT_CELLS * node.depth;
+    match node.kind {
+        NodeKind::Dir => start..start + TREE_GLYPH_CELLS,
+        NodeKind::File => start..start, // empty: nothing to click on a file row
+    }
+}
+
 /// Render one tree row: `<git><annotation><indent><glyph><name>`. The annotation marker replaces
 /// the reserved blank prefix cell, so git coexistence and row geometry stay unchanged.
 ///
@@ -485,7 +515,7 @@ fn tree_row(node: &Node, selected: bool, annotated: bool) -> Line<'static> {
         "{}{}{}{}",
         status_marker(node),
         if annotated { '@' } else { ' ' },
-        "  ".repeat(node.depth),
+        " ".repeat(TREE_INDENT_CELLS * node.depth),
         glyph,
     );
     let name_style = if annotated && !selected {
@@ -1008,19 +1038,14 @@ fn draw_tree(frame: &mut Frame, area: Rect, state: &ViewState) {
         })
         .collect();
     // Reserve an in-pane gutter for whichever scrollbars are needed, then render the rows into the
-    // (possibly shrunk) text rect. The vertical offset scrolls minimally from last frame's offset
-    // (#45) so selecting a row already in view doesn't jump the viewport; the horizontal offset
-    // lets long / deeply-nested rows be read sideways (`H`/`L` scroll the tree; ←/→ are
-    // expand/collapse in the tree).
+    // (possibly shrunk) text rect. The vertical offset either follows the cursor (scrolling
+    // minimally from last frame's offset, #45) or is the user's own wheel/scrollbar offset — see
+    // `tree_scroll_offset`; the horizontal offset lets long / deeply-nested rows be read sideways
+    // (`H`/`L` scroll the tree; ←/→ are expand/collapse in the tree).
     // `geometry` recomputes the SAME layout + offset, so hit-testing agrees with what is drawn.
     let max_width = tree_rows_max_width(&state.nodes);
     let (text, vbar, hbar) = tree_bars(inner, state.nodes.len(), max_width);
-    let offset = sticky_scroll_offset(
-        state.selected,
-        state.nodes.len(),
-        text.height as usize,
-        state.tree_scroll as usize,
-    );
+    let offset = tree_scroll_offset(state, text.height as usize);
     let hoff = (state.tree_hscroll as usize).min(max_width.saturating_sub(text.width as usize));
     frame.render_widget(
         Paragraph::new(rows).scroll((
@@ -1030,15 +1055,14 @@ fn draw_tree(frame: &mut Frame, area: Rect, state: &ViewState) {
         text,
     );
     if let Some(track) = vbar {
-        // The tree's vertical thumb tracks the CURSOR (selected index), not the viewport offset —
-        // the tree has no independent vertical scroll (its position follows the selection, #45), so
-        // dragging the bar scrubs the selection and the thumb must follow it. (The content vbar,
-        // which has a real offset, uses that — see `draw_content`.)
+        // The thumb tracks the VIEWPORT offset, like the content pane's bar (and like every desktop
+        // file list): the wheel and a drag on this bar both move the viewport, so the thumb must
+        // show where the viewport is — not where the cursor is, which can now sit off-screen.
         draw_vscrollbar(
             frame,
             track,
             state.nodes.len(),
-            state.selected,
+            offset,
             text.height as usize,
         );
     }
@@ -1324,9 +1348,9 @@ fn columns(area: Rect, state: &ViewState) -> (Option<Rect>, Option<Rect>, Option
 
 /// Hit-test geometry for mouse input, derived from the same split [`draw`] renders.
 /// `tree_inner` is the interior where tree rows are drawn — the visible node at screen row
-/// `tree_inner.y + r` is index `r + tree_scroll` (the tree scrolls to keep the selection in
-/// view, #45). `content_inner` is the content column interior. `divider_x` is the draggable
-/// boundary column (wide layout only).
+/// `tree_inner.y + r` is index `r + tree_scroll` (the tree scrolls to keep the selection in view,
+/// #45, or sits where the wheel left it — see [`tree_scroll_offset`]). `content_inner` is the
+/// content column interior. `divider_x` is the draggable boundary column (wide layout only).
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PaneGeometry {
     pub area_x: u16,
@@ -1423,13 +1447,7 @@ pub fn geometry(area: Rect, state: &ViewState) -> PaneGeometry {
         None => (None, None, None),
     };
     let tree_scroll = tree_inner.map_or(0, |t| {
-        sticky_scroll_offset(
-            state.selected,
-            state.nodes.len(),
-            t.height as usize,
-            state.tree_scroll as usize,
-        )
-        .min(u16::MAX as usize) as u16
+        tree_scroll_offset(state, t.height as usize).min(u16::MAX as usize) as u16
     });
     let tree_content_width = if tree_inner.is_some() {
         max_width.min(u16::MAX as usize) as u16
@@ -1792,6 +1810,26 @@ fn scroll_offset(cursor: usize, len: usize, visible: usize) -> usize {
     } else {
         (cursor + 1 - visible).min(max_offset)
     }
+}
+
+/// The tree's vertical offset for a `visible`-row viewport — the ONE place the two tree modes are
+/// decided, shared by [`draw_tree`] and [`geometry`] so the drawn rows and the hit-test geometry
+/// can never disagree about which node sits on which screen row.
+///
+/// - **Detached** (the wheel / a scrollbar drag scrolled the viewport): honour
+///   [`ViewState::tree_scroll`] as the user set it, clamped to the last screenful, and let the
+///   selection go off-screen.
+/// - **Attached** (the default): [`sticky_scroll_offset`] from last frame's offset, so the cursor
+///   stays visible and a click on a visible row never jumps the viewport (#45).
+fn tree_scroll_offset(state: &ViewState, visible: usize) -> usize {
+    let len = state.nodes.len();
+    if !state.tree_scroll_detached {
+        return sticky_scroll_offset(state.selected, len, visible, state.tree_scroll as usize);
+    }
+    if visible == 0 || len <= visible {
+        return 0;
+    }
+    (state.tree_scroll as usize).min(len - visible)
 }
 
 /// Like [`scroll_offset`] but scrolls **minimally** from the `current` offset: if the cursor is
@@ -2783,6 +2821,55 @@ mod tests {
             .filter(|s| s.style == Style::new().patch(style))
             .map(|s| s.content.as_ref())
             .collect()
+    }
+
+    /// A tree node fixture at `depth`, of `kind`.
+    fn tree_node(depth: usize, kind: NodeKind, expanded: bool) -> Node {
+        Node {
+            path: std::path::PathBuf::from("/r/x"),
+            kind,
+            depth,
+            expanded,
+            status: None,
+            dir_dirty: false,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn tree_row_prefix_width_matches_the_arrow_span() {
+        // The drawn prefix and the click target are two readings of one layout: the arrow span must
+        // END exactly where the drawn prefix does (i.e. where the name starts), at every depth and
+        // with the git/annotation markers occupied. If `tree_row`'s prefix ever changes width, this
+        // fails instead of silently shifting the clickable arrow off the glyph.
+        for depth in 0..4 {
+            for annotated in [false, true] {
+                let mut dir = tree_node(depth, NodeKind::Dir, false);
+                dir.dir_dirty = true; // a non-blank status cell
+                let row = tree_row(&dir, false, annotated);
+                let prefix_width = row.spans[0].content.chars().count();
+                let span = tree_arrow_span(&dir);
+                assert_eq!(
+                    span.end, prefix_width,
+                    "the arrow span must end where the name starts (depth {depth})"
+                );
+                assert_eq!(
+                    span.len(),
+                    TREE_GLYPH_CELLS,
+                    "the arrow span covers the glyph the row draws"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tree_arrow_span_is_empty_for_a_file() {
+        // A file's glyph is the blank placeholder that keeps columns aligned — there is nothing to
+        // expand, so it must offer no click target (an empty range contains nothing).
+        let file = tree_node(2, NodeKind::File, false);
+        let span = tree_arrow_span(&file);
+        assert!(span.is_empty(), "a file row has no arrow to click");
+        assert!(!span.contains(&span.start));
     }
 
     #[test]

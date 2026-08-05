@@ -5,7 +5,10 @@ deliberately.
 
 1. **Read-only by default.** The viewer observes; it does not mutate files or git
    state. Any future write capability is an explicit, opt-in exception, never a
-   surprise.
+   surprise. Hand-offs are the boundary of this promise, not a hole in it: `e`
+   launches `$EDITOR`, `!` hands a typed command to a shell — the viewer starts
+   them at the user's explicit request and writes nothing itself. What the user
+   then does in that editor or shell is theirs, and is never done on their behalf.
 
 2. **Delegate rendering; own the experience.** Reuse mature terminal tools for
    markdown, diff, and syntax rendering. Build only the differentiated shell

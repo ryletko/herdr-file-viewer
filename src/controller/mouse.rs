@@ -224,7 +224,12 @@ impl Controller {
                     self.last_click = None;
                     Effects::noop()
                 }
-                None => self.handle_click(col, row),
+                None => self.handle_click(
+                    col,
+                    row,
+                    ev.modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT),
+                ),
             },
             _ => Effects::noop(),
         }
@@ -232,8 +237,12 @@ impl Controller {
 
     /// A completed left-click: select the tree row it landed on (or focus the content pane). A
     /// double-click [`activate`](Self::activate)s the row — a directory toggles expand/collapse,
-    /// a file opens in zoom mode (the editor hand-off is the `e` key, not the mouse).
-    fn handle_click(&mut self, col: u16, row: u16) -> Effects {
+    /// a file opens in zoom mode. `hand_off` (Ctrl **or** Alt held on release) opens a file with
+    /// the OS default app instead — the mouse equivalent of the `O` key; on a directory it is a
+    /// plain select, and it never pairs into a double-click. Two modifiers because a terminal may
+    /// claim one of them before the application sees it: WezTerm, for instance, can bind Ctrl+click
+    /// to open-hyperlink with `mouse_reporting = true`, which takes it even from a TUI.
+    fn handle_click(&mut self, col: u16, row: u16, hand_off: bool) -> Effects {
         let region = self.hit_test(col, row);
         let now = Instant::now();
         match region {
@@ -252,10 +261,35 @@ impl Controller {
                 self.focus = Focus::Tree;
                 self.tree.set_cursor(idx);
                 self.dispatch_render(); // selection changed → re-render the content pane
+                if hand_off {
+                    // Ctrl/Alt+click opens a file with the OS default app, as `O` does. Clear
+                    // the pending click so it cannot pair with the next one as a double-click —
+                    // the hand-off already consumed this gesture.
+                    self.last_click = None;
+                    return if self
+                        .tree
+                        .selected()
+                        .is_some_and(|n| n.kind == NodeKind::File)
+                    {
+                        self.open_with_app()
+                    } else {
+                        Effects::redraw() // directory: plain select, no expand/collapse
+                    };
+                }
                 if double {
                     return self.activate(); // folder → expand/collapse, file → zoom mode
                 }
                 Effects::redraw()
+            }
+            MouseRegion::TreeArrow(idx) => {
+                // A click ON the expand arrow toggles that directory and nothing else: no selection
+                // change, so the content pane keeps showing the file you were reading while you
+                // open a folder somewhere else in the tree (the file-explorer convention). Clear the
+                // pending click — this gesture is consumed, and the row indices just shifted under
+                // it, so pairing it into a double-click would act on a different node.
+                self.last_click = None;
+                self.action_notice = None;
+                self.toggle_dir_at(idx)
             }
             MouseRegion::ContentTitle => {
                 // Double-click the content title (filename border) toggles zoom: hide/show the
@@ -290,22 +324,91 @@ impl Controller {
         }
     }
 
-    /// Scroll the pane under the cursor: the content pane scrolls vertically; over the tree the
-    /// wheel moves the selection (the tree then scrolls to keep it in view, #45).
+    /// Expand or collapse the directory at visible index `idx`, **keeping the selection on whatever
+    /// node it was on** — the arrow-click path, where the user is opening a folder, not choosing a
+    /// file. The cursor is an index into the visible rows, and a toggle renumbers every row below
+    /// the directory, so the node that was selected is re-found by PATH and the cursor moved to its
+    /// new index (a plain `set_cursor(old_index)` would silently land on a different file).
+    ///
+    /// Two follow-ups keep the rest of the view still: a detached wheel offset is re-pinned to the
+    /// new cursor index so the viewport does not snap back to the selection, and the content pane is
+    /// re-rendered ONLY when the selection genuinely changed — which happens when the collapsed
+    /// directory swallowed it, in which case the directory itself becomes the selection.
+    fn toggle_dir_at(&mut self, idx: usize) -> Effects {
+        let nodes = self.tree.visible_nodes();
+        let Some(node) = nodes.get(idx).filter(|n| n.kind == NodeKind::Dir) else {
+            return Effects::noop();
+        };
+        let dir = node.path.clone();
+        let was_expanded = node.expanded;
+        let selected_path = nodes.get(self.tree.cursor()).map(|n| n.path.clone());
+
+        if was_expanded {
+            self.tree.collapse(&dir);
+        } else {
+            self.tree.expand(&dir);
+        }
+
+        let nodes = self.tree.visible_nodes();
+        let index_of = |p: &Path| nodes.iter().position(|n| n.path == p);
+        let (cursor, selection_changed) = match selected_path.as_deref().and_then(index_of) {
+            Some(i) => (i, false),
+            // The selection lived inside the directory just collapsed, so it has no row any more:
+            // fall back to that directory — the nearest thing still on screen.
+            None => (index_of(&dir).unwrap_or(0), true),
+        };
+        self.tree.set_cursor(cursor);
+        if let Some((offset, _)) = self.tree_scroll {
+            self.tree_scroll = Some((offset, cursor));
+        }
+        if selection_changed {
+            self.dispatch_render();
+        }
+        Effects::redraw()
+    }
+
+    /// Scroll the pane under the cursor by the wheel step — both columns move their **viewport**,
+    /// never their selection, the desktop file-list convention: the content pane scrolls its text,
+    /// the tree scrolls its rows and leaves the selection (and so the content pane) alone. Like the
+    /// content pane, the wheel does not steal focus — pointing at a column is not choosing it
+    /// (keyboard-first, AC-18).
     fn scroll_at(&mut self, col: u16, row: u16, delta: isize) -> Effects {
         match self.hit_test(col, row) {
             MouseRegion::Content => {
                 self.scroll_content(delta);
                 Effects::redraw()
             }
-            MouseRegion::TreeRow(_) => {
-                self.focus = Focus::Tree;
-                self.tree.move_cursor(delta.signum());
-                self.dispatch_render();
-                Effects::redraw()
-            }
+            // The arrow cells are part of the row for scrolling purposes — the wheel behaves the
+            // same wherever in the tree the pointer sits.
+            MouseRegion::TreeRow(_) | MouseRegion::TreeArrow(_) => self.scroll_tree(delta),
             _ => Effects::noop(),
         }
+    }
+
+    /// Scroll the tree's viewport by `delta` rows, detaching it from the cursor: the selection stays
+    /// put (so no re-render is dispatched — scrolling past a file must not load it), and the
+    /// selected row may scroll off-screen. Clamped to `[0, nodes − viewport]` from the last drawn
+    /// frame, so it can never over-scroll past the final screenful.
+    ///
+    /// The offset is pinned to the current cursor index; the next cursor move makes that pin stale
+    /// and re-attaches the viewport to the selection — see [`Controller::tree_scroll`].
+    fn scroll_tree(&mut self, delta: isize) -> Effects {
+        let visible = self.geom.tree_inner.map_or(0, |t| t.height) as usize;
+        let max = self.tree.visible_nodes().len().saturating_sub(visible);
+        if max == 0 {
+            return Effects::noop(); // every node fits — nothing to scroll
+        }
+        let cursor = self.tree.cursor();
+        // Continue from wherever the tree currently sits: our own detached offset if it is still
+        // pinned to this cursor, else the offset the Presenter drew last frame (so the first wheel
+        // event picks up from what is on screen instead of jumping to the top).
+        let current = match self.tree_scroll {
+            Some((offset, pinned)) if pinned == cursor => offset,
+            _ => self.geom.tree_scroll,
+        };
+        let next = (current as isize + delta).clamp(0, max as isize) as u16;
+        self.tree_scroll = Some((next, cursor));
+        Effects::redraw()
     }
 
     /// Horizontal wheel / trackpad swipe scrolls sideways: the content pane (like the `←`/`→`
@@ -314,7 +417,7 @@ impl Controller {
     fn hscroll_at(&mut self, col: u16, row: u16, delta: i32) -> Effects {
         match self.hit_test(col, row) {
             MouseRegion::Content => self.scroll_content_h(delta),
-            MouseRegion::TreeRow(_) => self.scroll_tree_h(delta),
+            MouseRegion::TreeRow(_) | MouseRegion::TreeArrow(_) => self.scroll_tree_h(delta),
             _ => Effects::noop(),
         }
     }
@@ -409,31 +512,21 @@ impl Controller {
         Effects::redraw()
     }
 
-    /// Map a vertical press/drag on the tree's vertical scrollbar to a selection — scrubbing the
-    /// cursor through the file list, which scrolls the tree to keep it in view (the tree has no
-    /// independent vertical offset; its position follows the selection, #45).
+    /// Map a vertical press/drag on the tree's vertical scrollbar to a **viewport offset**, exactly
+    /// as the content pane's bar maps to `content_scroll`: the thumb is the window onto the file
+    /// list, so dragging it scrolls the rows and leaves the selection where it is. The wheel and
+    /// this bar therefore agree — both detach the viewport from the cursor.
     fn scroll_tree_to_row(&mut self, row: u16) -> Effects {
         let Some(track) = self.geom.tree_vbar else {
             return Effects::noop();
         };
-        let len = self.tree.visible_nodes().len();
-        // `max = len - 1` (the last index): a 1-cell track or a list of ≤ 1 node yields `None` here,
-        // exactly the old `span == 0 || len <= 1` no-op.
-        let Some(idx) =
-            Self::track_to_offset(row, track.y, track.height, len.saturating_sub(1) as u32)
-        else {
+        let visible = self.geom.tree_inner.map_or(0, |t| t.height) as usize;
+        let max = self.tree.visible_nodes().len().saturating_sub(visible);
+        // A 1-cell track (`span == 0`) or a tree with nothing to scroll (`max == 0`) is inert.
+        let Some(offset) = Self::track_to_offset(row, track.y, track.height, max as u32) else {
             return Effects::noop();
         };
-        let idx = idx as usize;
-        self.focus = Focus::Tree;
-        // A drag fires many events on the same row; only re-select (and re-render the content, an
-        // expensive job) when the target actually changes, so a held scrub doesn't re-render the
-        // same file every tick.
-        if idx == self.tree.cursor() {
-            return Effects::redraw();
-        }
-        self.tree.set_cursor(idx);
-        self.dispatch_render();
+        self.tree_scroll = Some((offset.min(u16::MAX as u32) as u16, self.tree.cursor()));
         Effects::redraw()
     }
 
@@ -494,7 +587,20 @@ impl Controller {
             // tree's scroll offset (#45), the same value `draw_tree` scrolled by. The row index may
             // still exceed the node count (the empty area below the last node): the click handler
             // treats that as inert, while the wheel still scrolls the column.
-            return MouseRegion::TreeRow((row - t.y) as usize + self.geom.tree_scroll as usize);
+            let idx = (row - t.y) as usize + self.geom.tree_scroll as usize;
+            // Inside that row, the expand glyph is its own target: map the cell back through the
+            // same horizontal scroll `draw_tree` applied, then ask the Presenter where the arrow of
+            // THAT node sits. A file's span is empty, so a file row can never answer `TreeArrow`.
+            let row_col = (col - t.x) as usize + self.tree_hscroll as usize;
+            if self
+                .tree
+                .visible_nodes()
+                .get(idx)
+                .is_some_and(|n| crate::presenter::tree_arrow_span(n).contains(&row_col))
+            {
+                return MouseRegion::TreeArrow(idx);
+            }
+            return MouseRegion::TreeRow(idx);
         }
         // Title is the top border of the content column (outside `content_inner`); check before
         // the text interior so a click on the filename toggles zoom rather than only focusing.

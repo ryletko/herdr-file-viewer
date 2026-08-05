@@ -54,6 +54,7 @@ is unit-testable with stubs.
 | `config` | Load & resolve the read-only TOML config: path resolution (`$HERDR_PLUGIN_CONFIG_DIR`, else XDG fallback), defensive parse (malformed input degrades to defaults, never panics), and precedence (config > env > default) → the `EffectiveSettings` consumed at startup by `editor`, `render`, `opener`, and `update`; it also parses the `[keys]` remapping table into `KeySpec` (string-or-array) entries the `input` bindings resolver layers over the registry. Never writes the file. |
 | `editor` | Hand a file off to `$EDITOR`, or the config's `editor` override (launch only — never reads or writes the file). |
 | `opener` | Read-only OS hand-off for the `O` / `R` keys: a pure per-OS argv builder (open-with-default-app / reveal-in-file-manager, overridable via the config's `open` / `reveal` keys) plus an `Opener` seam over the reused editor `Spawner`, spawned **non-blocking** (no terminal takeover, stdio nulled) so the TUI keeps running. |
+| `runner` | The pure half of the `!` run-a-command hand-off: pick the target directory (a directory itself, a file's parent), build the two herdr argv (`tab create --cwd … --label … --focus`, then `pane run <pane> <command>`), and read the new tab's pane id out of herdr's JSON — validated for flag-safety before it reaches an argv. The command is carried as ONE unsplit element so the tab's shell parses it; a leading `-` is masked with a space so herdr's own CLI cannot claim it. Spawns nothing itself: the herdr seam runs the calls, and herdr's shell runs the command. |
 | `launch` | The "launch-or-focus-or-toggle" decision behind the shell launch scripts (pure, hermetically testable). |
 | `open_target` | Pure argv parse (`parse_args`), open-target parse/resolve (`path` / `path:line` from CLI `--open` or `HERDR_FILE_VIEWER_OPEN`, lexically normalized under the root), and helpers; the controller applies a target once at startup via reveal + optional pending go-to-line. |
 
@@ -89,6 +90,10 @@ retain file/title markers where applicable but never receive guessed source-line
   operations change only in-memory session state, and copy uses the same OSC 52 clipboard seam as
   path/line copy. The editor path is a hand-off to an external process. Every `git` invocation uses
   read-only subcommands.
+  **What a hand-off does is not the viewer's doing.** `e` runs `$EDITOR` on a file, and `!` hands a
+  command the user typed to a herdr tab's shell; either external process can change anything the
+  user could change from a terminal. The invariant is about what *this* process writes — it never
+  claims the programs it launches are read-only.
 - **Delegate rendering.** Markdown, diffs, and syntax highlighting are produced by best-in-class
   external CLIs (`glow`, `delta`, `bat`): the viewer builds only the shell and ingests their
   ANSI output. Each renderer is optional; a missing one degrades to plain text + a notice.

@@ -29,6 +29,7 @@ pub mod proc;
 pub mod prompt;
 pub mod render;
 pub mod root;
+pub mod runner;
 pub mod search;
 pub mod text_layout;
 pub mod tree;

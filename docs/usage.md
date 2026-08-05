@@ -32,7 +32,11 @@ looking.
 Move the cursor with `↑`/`↓` (or `k`/`j`), expand/collapse a directory with `→`/`←` (or `l`/`h`) or
 `Enter`. The tree scrolls to keep the selection in view, and sideways for long or deeply-nested
 names — reachable by keyboard with `H` / `L` when the tree is focused. A scrollbar appears whenever
-there's more than fits. Narrow or widen the tree column with `<` / `>`, or drag the divider; the
+there's more than fits. The **mouse wheel and that scrollbar move the view, not the selection**: you
+can browse a long tree without loading a file, and the content pane keeps showing the file you
+picked. Clicking a row selects it; any key that moves the cursor scrolls it back into view. Clicking
+a folder's **arrow** (`▸`/`▾`) opens or closes just that folder and leaves the selection alone — so
+you can dig through the tree without losing the file you're reading. Narrow or widen the tree column with `<` / `>`, or drag the divider; the
 starting split, the tree's side, and a column cap are all [configurable](configuration.md).
 
 On a **deeply nested** layout the per-segment tree spends most of a narrow column on indentation, and
@@ -327,9 +331,18 @@ The viewer is read-only; to *act* on a file it hands off to another tool:
   image opens in the system viewer, and so on). Non-blocking — the viewer keeps running.
 - **Reveal in file manager** (`R`): open Finder / Explorer / a Linux file manager with the entry
   highlighted where supported, so you can drag it out (e.g. into Slack).
+- **Run a command** (`!`): type a shell command and it runs in a **new herdr tab** rooted at the
+  selected directory — a file's directory when a file is selected. `code .`, `npm test`, `lazygit`:
+  whatever you would type in a terminal there. The prompt names the directory (`Run in src:`) and
+  opens empty; `↑`/`↓` recall this session's commands like a shell, so running the same thing
+  elsewhere is `!` `↑` `Enter`. The tab is named after the command and stays open with its output
+  when the command finishes. Needs a live herdr; see
+  [running a command](keys.md#running-a-command).
 
-All three are read-only hand-offs; the viewer never modifies a file itself. The `open` / `reveal`
-commands are [configurable](configuration.md).
+The viewer never modifies a file itself — each of these starts another program and steps aside. The
+one thing to be aware of: `e` and `!` launch tools that *can* write (your editor, your shell), so the
+read-only guarantee covers the viewer, not the command you send. The `open` / `reveal` commands are
+[configurable](configuration.md).
 
 ## Switching worktree
 

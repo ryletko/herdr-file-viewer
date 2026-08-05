@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- `!` runs a shell command in a **new herdr tab** rooted at the selected directory (for a file, the directory holding it): `code .`, `npm test`, `lazygit`. The prompt names the directory and opens empty, with `↑`/`↓` recalling the session's commands shell-style, so repeating one elsewhere is `!` `↑` `Enter`; the tab is named after the command and keeps its output when the command exits. The command reaches the tab's shell exactly as typed — pipes, `&&` and quoting are your shell's. Like `e`/`$EDITOR`, this is a hand-off: the viewer runs nothing itself, so its read-only guarantee covers the viewer, not what you launch. Needs a live herdr. → [keys](docs/keys.md#running-a-command) · [usage](docs/usage.md#handing-a-file-off)
+- Click a folder's expand arrow (`▸`/`▾`) to open or close it — a single click, no double-click needed. The selection and the content pane stay where they are, so you can dig through the tree without losing the file you are reading; collapsing a folder that holds the selection moves it to that folder. A click on the folder's *name* still selects (and double-click still expands). → [keys](docs/keys.md#mouse) · [usage](docs/usage.md#the-tree)
+
+### Changed
+- The mouse wheel over the directory tree now scrolls the **view**, not the selection — the desktop file-list convention. Browsing a long tree no longer walks the cursor down it (and no longer renders every file it passes); the content pane stays on the file you picked, and the selected row may scroll off-screen until any cursor key brings it back. Dragging the tree's vertical scrollbar moves the view the same way (its thumb now shows the viewport, like the content pane's), and the wheel step over the tree follows [`scroll_lines`](docs/configuration.md) instead of being a fixed one row per event. → [keys](docs/keys.md#mouse) · [usage](docs/usage.md#the-tree)
+
 ### Fixed
 - Agent skill: the launch instructions no longer tell agents to pass `--cwd`. herdr resolves the manifest's relative pane command against it, so the launch failed with `plugin_pane_open_failed` — or worse, inside a built plugin checkout, silently ran that checkout's binary. The skill and the `docs/usage.md` snippet now explain that the viewed root follows the *focused herdr pane's* directory, so an agent's own `cd` does not move it. Thanks @AntonyKor (#139) → [agent skill](skills/herdr-file-viewer/SKILL.md) · [usage](docs/usage.md#teach-your-agent)
 

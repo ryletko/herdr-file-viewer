@@ -12,6 +12,9 @@ pub enum PromptMode {
     /// Substring search across the content pane's lines (`/`). Read-only navigation —
     /// moves highlight/scroll only, never mutates a file (AC-N1/N3, AC-8).
     Search,
+    /// Type a shell command to run in a new herdr tab rooted at the selected directory (`!`).
+    /// The viewer never executes it — the tab's shell does (an external hand-off, like `e`).
+    RunCommand,
 }
 
 /// State for an open search session: the committed query, the matches it produced, and

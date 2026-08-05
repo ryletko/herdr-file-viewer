@@ -336,6 +336,13 @@ pub(crate) const REGISTRY: &[Binding] = &[
         category: "Open & copy",
     },
     Binding {
+        intent: Intent::RunCommand,
+        name: "run_command",
+        default_keys: &[KeyCode::Char('!')],
+        description: "Run a shell command in a new herdr tab, rooted at the selected directory.",
+        category: "Open & copy",
+    },
+    Binding {
         intent: Intent::RevealInFileManager,
         name: "reveal_in_file_manager",
         default_keys: &[KeyCode::Char('R')],
@@ -824,6 +831,7 @@ mod tests {
         (KeyCode::Char('L'), Intent::TreeScrollRight),
         (KeyCode::Char('O'), Intent::OpenWithApp),
         (KeyCode::Char('R'), Intent::RevealInFileManager),
+        (KeyCode::Char('!'), Intent::RunCommand),
         (KeyCode::Char('y'), Intent::CopyRepoPath),
         (KeyCode::Char('Y'), Intent::CopyAbsPath),
         (KeyCode::Char('a'), Intent::AddAnnotation),
