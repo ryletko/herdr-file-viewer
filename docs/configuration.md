@@ -70,7 +70,7 @@ show_ignored = false        # true to show gitignored files at startup (the `i` 
 compact_dirs = false        # true to draw a chain of single-child dirs as ONE row (src/main/java)
 update_check = true         # false disables all remote requests and their display
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
-scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
+scroll_lines = 3            # mouse-wheel step (content/tree/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
 tree_width = 30             # tree column's share of the viewer pane, percent 20-80 (content takes the rest)
 tree_max_cols = 30          # HARD CAP in columns; the SMALLER of this and tree_width% wins (raise both to widen)
 tree_position = "left"      # which side the directory tree sits on: "left" (default) or "right"
@@ -199,6 +199,7 @@ customized).
 | **Open & copy** | `open_in_editor` | `e` | Hand the selected file off to an external editor |
 | | `open_with_app` | `O` | Open the selected entry with the OS default application |
 | | `reveal_in_file_manager` | `R` | Reveal the selected entry in the OS file manager |
+| | `run_command` | `!` | Run a shell command in a new herdr tab, rooted at the selected directory |
 | | `copy_repo_path` | `y` | Copy the selected node's repo-relative path to the clipboard |
 | | `copy_abs_path` | `Y` | Copy the selected node's absolute path to the clipboard |
 | **Annotations** | `add_annotation` | `a` | Add an in-memory annotation for the selected file |

@@ -29,6 +29,7 @@ is additive and on by default.
 | `e` | Open the selected file in `$EDITOR` (see [Opening in an editor](#opening-in-an-editor)) |
 | `O` (Shift+`o`) | **Open with default app**: hand the selected file or directory to the OS default application (e.g. an image opens in the system viewer). Read-only hand-off; non-blocking (the viewer keeps running) |
 | `R` (Shift+`r`) | **Reveal in file manager**: open the OS file manager (Finder / Explorer / a Linux file manager) with the selected entry highlighted where supported, so you can drag it out (e.g. into Slack). Read-only hand-off |
+| `!` (Shift+`1`) | **Run a command**: type a shell command and it runs in a **new herdr tab** rooted at the selected directory (for a file, the directory holding it) — `code .`, `npm test`, `lazygit`. The prompt opens empty; `↑`/`↓` recall this session's commands, `Esc` cancels. Needs a live herdr (see [Running a command](#running-a-command)) |
 | `f` | **Go to file**: open a fuzzy finder over every file in the tree; type to filter, `↑` / `↓` move, `Enter` opens the selected file, `Esc` cancels (`←` / `→` scroll long paths) |
 | `:` | **Go to line**: open a prompt and jump the content pane to a source line by number (`Enter` jumps, `Esc` cancels; out-of-range clamps to the last line). Works in any view; in a rendered-markdown or diff view, confirming switches to the line-numbered content view and jumps there |
 | `/` | **Search in file**: open a prompt and highlight every match in the content pane as you type; `Enter` commits the search (highlights persist), `Esc` clears it and restores the scroll. Smartcase (a lowercase query is case-insensitive; a capital makes it case-sensitive). Works in any view |
@@ -149,6 +150,31 @@ sideways trackpad swipe. The `←` / `→` keys always scroll the content sidewa
 always scroll the tree sideways, regardless of terminal.
 
 The mouse-wheel step is configurable — see [`scroll_lines`](configuration.md).
+
+## Running a command
+
+`!` asks for a shell command and runs it in a **new herdr tab** whose working directory is the
+selected directory — or, with a file selected, the directory that holds it. The prompt names it, so
+you always see where the command will land:
+
+```
+Run in src: npm test
+```
+
+`Enter` runs it, `Esc` cancels. The tab is named after the command (`npm test`) so it is findable in
+herdr's tab strip, and it stays open when the command finishes — the output is yours to read, and
+the shell is yours to keep using.
+
+The prompt opens **empty**, and `↑` / `↓` walk the commands you ran this session, newest first —
+like a shell. So running the same thing in another directory is `!` `↑` `Enter`, and a recalled
+command can be edited before you run it. The history lives in memory for the session only.
+
+The command goes to that tab's shell **exactly as typed**: pipes, `&&`, quotes and globs behave the
+way your shell defines them. The viewer neither parses nor runs it — this is a hand-off, like `e`
+and `$EDITOR`. It follows that the command can do whatever you could do from a shell, including
+change files; the viewer's own read-only guarantee is about what *it* does, not what you launch.
+
+Because the tab comes from herdr, this needs a live herdr: run outside it and `!` says so instead.
 
 ## Opening in an editor
 

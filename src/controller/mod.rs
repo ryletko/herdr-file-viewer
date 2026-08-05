@@ -29,6 +29,7 @@ mod infile;
 mod lineselect;
 mod mouse;
 mod picker;
+mod runner;
 
 use crate::annotation::AnnotationStore;
 use crate::finder::FinderState;
@@ -699,6 +700,14 @@ pub struct Controller {
     /// What the held left button is dragging (divider resize or a scrollbar), so the release is
     /// treated as the end of the drag, not a click. `None` ⇒ no drag in progress.
     drag: Option<Drag>,
+    /// Commands run via `!` this session, oldest first — walked with `↑`/`↓` in the run prompt.
+    /// The prompt itself always opens EMPTY: pre-filling it made the common case (a different
+    /// command) worse, because typing appended to the leftover text instead of replacing it.
+    /// In-memory and ephemeral like the rest of the session state; nothing is written to disk.
+    command_history: Vec<String>,
+    /// Where `↑`/`↓` currently sits in [`command_history`](Self::command_history) while the run
+    /// prompt is open: `None` is the empty line it opened on. Reset every time the prompt opens.
+    history_pos: Option<usize>,
     /// An ambient character selection dragged out in the content pane during normal navigation, held
     /// OUTSIDE [`Modal`] so `Modal::None` stays in force and every keyboard binding keeps its normal
     /// meaning — that is what makes it ambient, not a mode. Reuses the [`LineSelectState`] char
@@ -901,6 +910,8 @@ impl Controller {
             geom: PaneGeometry::default(),
             last_click: None,
             drag: None,
+            command_history: Vec::new(),
+            history_pos: None,
             content_selection: None,
             notice_snapshot: NoticeSnapshot::default(),
             settings_display: None,
@@ -1837,6 +1848,17 @@ impl Controller {
                     let count = self.search_count_fragment(q);
                     Some(format!("Search: {q}{count}"))
                 }
+                // Name the directory in the label: the command runs THERE, not at the tree root,
+                // and for a selected file that is its parent — worth seeing before pressing Enter.
+                crate::infile::PromptMode::RunCommand => {
+                    let where_ = self
+                        .command_target()
+                        .as_deref()
+                        .and_then(Path::file_name)
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "?".into());
+                    Some(format!("Run in {where_}: {}", p.input.query()))
+                }
             }
         } else {
             self.search_status_line()
@@ -1954,6 +1976,7 @@ impl Controller {
             Intent::OpenInEditor => self.open_in_editor(),
             Intent::OpenWithApp => self.open_with_app(),
             Intent::RevealInFileManager => self.reveal_in_file_manager(),
+            Intent::RunCommand => self.open_run_command(),
             Intent::CopyRepoPath => self.copy_path(PathKind::Repo),
             Intent::CopyAbsPath => self.copy_path(PathKind::Absolute),
             Intent::AddAnnotation => self.add_annotation(),
@@ -2899,6 +2922,9 @@ impl Controller {
             // Search key handling: incremental — every printable char or Backspace re-runs the
             // match query and refreshes the highlight overlay (AC-14); Enter commits, Esc cancels.
             PromptMode::Search => self.search_prompt_key(key),
+            // Run-a-command: free text (a shell command is arbitrary), Enter hands it to a new
+            // herdr tab, Esc cancels.
+            PromptMode::RunCommand => self.run_command_key(key),
         }
     }
 
