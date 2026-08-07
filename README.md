@@ -12,6 +12,29 @@ on the left and, on the right, exactly the view each file deserves: a **diff** i
 **rendered markdown** if it's markdown, **syntax-highlighted code** otherwise. Git status is woven
 right into the tree. It opens beside whatever you're doing and never touches your files.
 
+## What this fork adds
+
+A fork of [smarzban/herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer), tracking
+upstream and adding four things — three that make the mouse behave the way a desktop file list
+does, and one that puts a shell where you are looking:
+
+| | Added |
+| --- | --- |
+| **Wheel** | Scrolls the tree's **view**, not the selection. Browsing a long tree no longer walks the cursor down it (and no longer renders every file it passes) — the content pane stays on the file you picked, and any cursor key brings the selection back into view. Dragging the tree's scrollbar does the same, and the wheel step follows [`scroll_lines`](docs/configuration.md). |
+| **Click** on `▸`/`▾` | Expands or collapses that folder on a **single** click, leaving the selection — and the content pane — where they are, so you can dig through the tree without losing the file you are reading. |
+| `Ctrl`/`Alt`+**click** | Opens the clicked file with the OS default app — the mouse equivalent of `O`. Two modifiers because a terminal may claim one first (WezTerm binds `Ctrl`+click to open-hyperlink even for a TUI). |
+| `!` | Runs a shell command in a **new herdr tab** rooted at the selected directory — a file's parent when a file is selected. `code .`, `npm test`, `lazygit`. The tab is named after the command and keeps its output; `↑`/`↓` recall the session's commands. Like `e`/`$EDITOR`, this is a hand-off: the viewer runs nothing itself, so its read-only guarantee covers the viewer, not the command you send. |
+
+Full detail in [keys](docs/keys.md#mouse) and [usage](docs/usage.md); everything else in this
+README is upstream's. No prebuilt binaries are published for this fork, so installing it builds
+from source (Rust 1.96+):
+
+```bash
+herdr plugin install ryletko/herdr-file-viewer
+```
+
+The CI badge above tracks upstream's pipeline, not this fork's.
+
 ![herdr-file-viewer open in a herdr split beside your work: the directory tree on the left, syntax-highlighted content on the right](assets/File-viewer.png)
 
 *The right view per file, here a markdown file rendered (headings, inline code, tables) in your terminal's theme:*
