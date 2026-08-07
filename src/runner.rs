@@ -178,9 +178,9 @@ mod tests {
         let label = tab_label(long);
         assert_eq!(label.chars().count(), LABEL_MAX, "ellipsized to the cap");
         assert!(label.ends_with('…'));
-        // Multibyte must not be cut mid-character (it would panic on a byte slice).
-        let cyrillic = "эхо ".repeat(20);
-        assert_eq!(tab_label(&cyrillic).chars().count(), LABEL_MAX);
+        // Multibyte must not be cut mid-character (a byte slice would panic here).
+        let multibyte = "échō wörld ".repeat(4);
+        assert_eq!(tab_label(&multibyte).chars().count(), LABEL_MAX);
     }
 
     #[test]
